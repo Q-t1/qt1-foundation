@@ -44,7 +44,7 @@
 
   users.users.qt1 = {
     isNormalUser = true;
-    extraGroups = [ "wheel" ];
+    extraGroups = [ "wheel" "libvirtd" "kvm" ];
     packages = with pkgs; [
       tree
     ];
@@ -76,6 +76,12 @@
     k3s
     kubernetes-helm
     ];
+
+  boot.kernelModules = [ "kvm-intel" "kvm-amd" ];
+
+  virtualisation.libvirtd = {
+    enable = true;
+  };
 
   services.k3s = {
     enable = true;
