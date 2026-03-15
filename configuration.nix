@@ -81,7 +81,6 @@
 
   environment.variables.KUBECONFIG = "/etc/rancher/k3s/k3s.yaml";
 
-  # Enable the OpenSSH daemon.
   services = {
     openssh = {
       enable = true;
@@ -94,6 +93,5 @@
   networking.firewall.allowedTCPPorts = [ 22 6443 ];
   
   system.stateVersion = "25.11"; # Did you read the comment?
-
 }
 
