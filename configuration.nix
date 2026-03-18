@@ -1,8 +1,4 @@
 { config, lib, pkgs, ... }:
-  let
-    kubeMasterIP = "127.0.0.1";
-    kubeMasterAPIServerPort = 6443;
-  in
 {
   imports =
     [ # Include the results of the hardware scan.
@@ -44,11 +40,10 @@
 
   users.users.qt1 = {
     isNormalUser = true;
-    extraGroups = [ "wheel" "libvirtd" "kvm" ];
+    extraGroups = [ "wheel" "k3sconfig" "libvirtd" "kvm" ];
     packages = with pkgs; [
       jq
       kubernetes-helm
-      clusterctl
     ];
     openssh.authorizedKeys.keys = [
       "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABgQDtASdfLMatnUWsdJIjIvIXqXrnmABAznN/6mji1/rzRLqrusduqahyi4htTRvOuue3vrhUqeywiRTNTpzthfhVqeF5WehE1wAPkbgGwAvxC8ltqLPza6KkfZF0WXdXj/MsKJDTJUwui+acbyJocuMz0teJOhURoaEetXzr+ffj6P9Txz7uX6KN8D2DYGi9WvG8QPdlF/89f5vtCx4GFrKkdSET+yNC3PEcf+X8wDoL+ztuvcTGLb4rC42NzLJ82VCAYZ6KS085s8GD+lcgU/jxpRUeCVoY7Ciym/VKs2oxVsyM45fP+d33BJmqV+WGgVLHz0T4y05HOS6CBLObbXZYLfDg7jNl/MVxVktNRfvPLr23z8IvUL1DR8lHIqc6jesFMe8W5PuaoxwzQIhRl8ywGT/rVq1btMiS41mqo/86pZAFtehTt04A3GbMVGB7NNO3tmaVbUlr/aSFdB/hLr0pU3uuZQsHCipZ/3+IGs7erU1r2VVNhnxd/JcDJEVstd8= quentin@MacBook-Air-de-Quentin.local"
@@ -70,6 +65,7 @@
   };
 
   environment.systemPackages = with pkgs; [
+    coredns
     git
     vim
     iputils
@@ -88,10 +84,22 @@
     role = "server";
     extraFlags = toString [
       "--disable=traefik"
-      "--write-kubeconfig-mode 640"
+      "--write-kubeconfig-mode 0640"
       "--write-kubeconfig-group k3sconfig"
     ];
+    autoDeployCharts = {
+      metallb = {
+        name = "metallb";
+        repo = "https://metallb.github.io/metallb";
+        version = "0.15.3";
+        hash = "sha256-J9t2HFrSUl/RMMkv4vLUUA+IcOQC/v48nLjTTYpxpww=";
+        targetNamespace = "metallb-system";
+        createNamespace = true;
+      };
+    };
   };
+
+  users.groups.k3sconfig = {};
 
   # required for rootless access
   environment.variables = {
@@ -102,12 +110,14 @@
     openssh = {
       enable = true;
       settings = {
-        PermitRootLogin = "no";
+        PubkeyAuthentication = "yes";
         PasswordAuthentication = false;
+        PermitRootLogin = "prohibit-password";
       };
     };
   };
-  networking.firewall.allowedTCPPorts = [ 22 6443 ];
+
+  networking.firewall.allowedTCPPorts = [ 22 6443 443 80 ];
   
   system.stateVersion = "25.11"; # Did you read the comment?
 }
