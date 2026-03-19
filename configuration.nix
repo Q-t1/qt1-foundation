@@ -71,17 +71,32 @@
     iputils
     ghostty
     k3s
-    ];
+    kata-runtime
+    cloud-hypervisor
+  ];
 
-  boot.kernelModules = [ "kvm-intel" "kvm-amd" ];
+  boot.kernelModules = [ "kvm-amd" ];
 
-  virtualisation.libvirtd = {
-    enable = true;
-  };
+  systemd.services.k3s.path = [ pkgs.kata-runtime ];
+  systemd.tmpfiles.settings."09-k3s"."/var/lib/rancher/k3s/agent/etc/containerd/config-v3.toml.tmpl"."L+".argument = let
+    template = ''
+      {{ template "base" . }}
+
+      [plugins.'io.containerd.cri.v1.runtime'.containerd.runtimes.'kata']
+          runtime_type = "io.containerd.kata.v2"
+          privileged_without_host_devices = true
+          pod_annotations = ["io.katacontainers.*"]
+          container_annotations = ["io.katacontainers.*"]
+      [plugins.'io.containerd.cri.v1.runtime'.containerd.runtimes.'kata'.options]
+          BinaryName = "${pkgs.kata-runtime}/usr/bin/containerd-shim-kata-v2"
+    '';
+    in "${pkgs.writeText "config-v3.toml.tmpl" template}";
+
 
   services.k3s = {
     enable = true;
     role = "server";
+    clusterInit = true;
     extraFlags = toString [
       "--disable=traefik"
       "--write-kubeconfig-mode 0640"
@@ -119,6 +134,6 @@
 
   networking.firewall.allowedTCPPorts = [ 22 6443 443 80 ];
   
-  system.stateVersion = "25.11"; # Did you read the comment?
+  system.stateVersion = "25.11";
 }
 
