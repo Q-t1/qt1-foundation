@@ -1,4 +1,4 @@
-{ config, lib, pkgs, ... }:
+{config, lib, pkgs, ... }:
 {
   imports =
     [ # Include the results of the hardware scan.
@@ -20,7 +20,7 @@
     hostName = "nixos-foundation";
     useDHCP = false;
     dhcpcd.enable = false;
-    interfaces.enp2s0 = {
+    interfaces.br-lan = {
       useDHCP = false;
       ipv4.addresses = [
         {
@@ -28,6 +28,9 @@
           prefixLength = 24;
         }
       ];
+    };
+    bridges.br-lan = {
+      interfaces = [ "enp2s0" ];
     };
     wireless.enable = false;
     defaultGateway = "192.168.1.254";
@@ -40,9 +43,12 @@
 
   users.users.qt1 = {
     isNormalUser = true;
-    extraGroups = [ "wheel" "k3sconfig" "libvirtd" "kvm" ];
+    extraGroups = [ "wheel" "incus-admin" "video" "render" ];
     packages = with pkgs; [
+      vulkan-tools
       jq
+      yq
+      skopeo
       kubernetes-helm
     ];
     openssh.authorizedKeys.keys = [
@@ -57,69 +63,14 @@
     autosuggestions.enable = true;
     syntaxHighlighting.enable = true;
   };
-  programs.zsh.ohMyZsh = {
-    enable = true;
-    plugins = [ "git" ];
-    custom = "$HOME/.oh-my-zsh/custom/";
-    theme = "powerlevel10k/powerlevel10k";
-  };
 
   environment.systemPackages = with pkgs; [
-    coredns
+    wget
     git
     vim
     iputils
     ghostty
-    k3s
-    kata-runtime
-    cloud-hypervisor
   ];
-
-  boot.kernelModules = [ "kvm-amd" ];
-
-  systemd.services.k3s.path = [ pkgs.kata-runtime ];
-  systemd.tmpfiles.settings."09-k3s"."/var/lib/rancher/k3s/agent/etc/containerd/config-v3.toml.tmpl"."L+".argument = let
-    template = ''
-      {{ template "base" . }}
-
-      [plugins.'io.containerd.cri.v1.runtime'.containerd.runtimes.'kata']
-          runtime_type = "io.containerd.kata.v2"
-          privileged_without_host_devices = true
-          pod_annotations = ["io.katacontainers.*"]
-          container_annotations = ["io.katacontainers.*"]
-      [plugins.'io.containerd.cri.v1.runtime'.containerd.runtimes.'kata'.options]
-          BinaryName = "${pkgs.kata-runtime}/usr/bin/containerd-shim-kata-v2"
-    '';
-    in "${pkgs.writeText "config-v3.toml.tmpl" template}";
-
-
-  services.k3s = {
-    enable = true;
-    role = "server";
-    clusterInit = true;
-    extraFlags = toString [
-      "--disable=traefik"
-      "--write-kubeconfig-mode 0640"
-      "--write-kubeconfig-group k3sconfig"
-    ];
-    autoDeployCharts = {
-      metallb = {
-        name = "metallb";
-        repo = "https://metallb.github.io/metallb";
-        version = "0.15.3";
-        hash = "sha256-J9t2HFrSUl/RMMkv4vLUUA+IcOQC/v48nLjTTYpxpww=";
-        targetNamespace = "metallb-system";
-        createNamespace = true;
-      };
-    };
-  };
-
-  users.groups.k3sconfig = {};
-
-  # required for rootless access
-  environment.variables = {
-    KUBECONFIG = "/etc/rancher/k3s/k3s.yaml";
-  };
 
   services = {
     openssh = {
@@ -130,10 +81,103 @@
         PermitRootLogin = "prohibit-password";
       };
     };
+    xserver.videoDrivers = [ "amdgpu" ];
   };
 
-  networking.firewall.allowedTCPPorts = [ 22 6443 443 80 ];
-  
+  hardware = {
+    graphics = {
+      enable = true;
+      extraPackages = with pkgs; [
+        vulkan-tools
+      ];
+    };
+    enableRedistributableFirmware = true;
+  };
+
+  virtualisation.incus = {
+    enable = true;
+    ui = {
+      enable = true;
+    };
+    package = pkgs.incus;
+    preseed = {
+      networks = [
+        {
+          config = {
+            "ipv4.address" = "10.0.0.1/24";
+            "ipv4.nat" = "true";
+          };
+          name = "incusbr0";
+          type = "bridge";
+        }
+      ];
+      profiles = [
+        {
+          name = "default";
+          devices = {
+            eth0 = {
+              name = "eth0";
+              network = "incusbr0";
+              type = "nic";
+            };
+            root = {
+              path = "/";
+              pool = "default";
+              size = "20GiB";
+              type = "disk";
+            };
+          };
+        }
+        {
+          name = "lan";
+          description = "LAN bridged VMs";
+          devices = {
+            eth0 = {
+              name = "eth0";
+              nictype = "bridged";
+              parent = "br-lan";
+              type = "nic";
+            };
+            root = {
+              path = "/";
+              pool = "default";
+              size = "20GiB";
+              type = "disk";
+            };
+          };
+        }
+      ];
+    };
+  };
+  networking.nftables.enable = true;
+  networking.firewall.allowedTCPPorts = [ 22 8443 ];
+  networking.firewall.trustedInterfaces = [ "incusbr0" ];
+
+  boot.kernelModules = [ "overlay" "br_netfilter" ];
+
+  # Runtime config via systemd override
+  systemd.services.incus-post-init = {
+    description = "Incus HTTPS config";
+    serviceConfig = {
+      User = "root";
+    };
+    after = [ "incus.service" ];
+    requires = [ "incus.service" ];
+    wantedBy = [ "multi-user.target" ];
+    path = [ pkgs.incus ];
+    script = ''
+      incus config set core.https_address ":8443" || true
+      incus config trust add-certificate /opt/incus/incus-ui.crt || true 
+      if ! incus storage list | grep -q default; then
+        echo "No default pool. Proceed to creation."
+        incus storage create default btrfs source=/incus-pool
+        incus config set storage.default_pool default
+      else
+        echo "Default pool already exists. Skipping creation..."
+      fi
+    '';
+  };
+
   system.stateVersion = "25.11";
 }
 
